@@ -67,6 +67,7 @@ test = [
     "langgraph-cli; python_version < '3.14'",
     "langgraph-cli[inmem]; python_version < '3.14'",
     "redis",
+    "pytest-codspeed",
 ]
 lint = [
     "mypy",

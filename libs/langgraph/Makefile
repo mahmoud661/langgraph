@@ -1,4 +1,4 @@
-.PHONY: all format lint type test test_watch integration_tests spell_check spell_fix benchmark profile start-dev-server integration_tests
+.PHONY: all format lint type test test_watch integration_tests spell_check spell_fix benchmark benchmark-fast benchmark-codspeed profile start-dev-server integration_tests
 
 # Default target executed when no arguments are given to make.
 all: help
@@ -23,6 +23,11 @@ benchmark-fast:
 	mkdir -p out
 	rm -f $(OUTPUT)
 	uv run python -m bench -o $(OUTPUT) --fast
+
+# CodSpeed benchmarks (pytest-codspeed). In CI these run under the CodSpeed
+# action in simulation mode; locally this uses the walltime fallback.
+benchmark-codspeed:
+	uv run pytest tests/benchmarks --codspeed --codspeed-mode=walltime
 
 GRAPH ?= bench/fanout_to_subgraph.py
 

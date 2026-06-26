@@ -1,0 +1,57 @@
+# CodSpeed performance benchmarks for langgraph.
+#
+# Runs the pytest-codspeed suite (libs/langgraph/tests/benchmarks) and uploads
+# results to CodSpeed. Kept separate from the main CI workflow so that
+# push-to-main baseline runs are never cancelled by later merges
+# (cancel-in-progress is only enabled for pull_request events). This workflow
+# is informational and is intentionally NOT a required CI gate.
+
+name: codspeed
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "libs/langgraph/**"
+      - ".github/workflows/codspeed.yml"
+
+# On PRs, cancel stale runs when new commits are pushed.
+# On push-to-main, never cancel -- these runs populate CodSpeed baselines.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  UV_FROZEN: "true"
+  UV_NO_SYNC: "true"
+
+jobs:
+  benchmarks:
+    name: CodSpeed Benchmarks
+    # Skippable per-PR via the `codspeed-ignore` label.
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'codspeed-ignore') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: libs/langgraph
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Python 3.11
+        uses: ./.github/actions/uv_setup
+        with:
+          python-version: "3.11"
+          cache-suffix: "codspeed"
+          working-directory: libs/langgraph
+      - name: Install dependencies
+        run: uv sync --group test
+      - name: Run benchmarks
+        uses: CodSpeedHQ/action@a50965600eafa04edcd6717761f55b77e52aafbd # v4
+        with:
+          mode: simulation
+          working-directory: libs/langgraph
+          run: uv run --no-sync pytest tests/benchmarks --codspeed
+          token: ${{ secrets.CODSPEED_TOKEN }}
