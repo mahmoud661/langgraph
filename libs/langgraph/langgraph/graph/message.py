@@ -38,6 +38,38 @@ Messages = list[MessageLikeRepresentation] | MessageLikeRepresentation
 REMOVE_ALL_MESSAGES = "__remove_all__"
 
 
+def _try_fast_merge(left: list[Any], right: list[Any]) -> list[BaseMessage] | None:
+    """Merge without indexing `left` when the merge is a plain append.
+
+    In steady state the reducer receives an already-normalized `left` (its own
+    previous output) and a `right` of brand-new messages, so the merge
+    degenerates to `left + right`. Detecting that requires only one cheap pass
+    over each list, instead of re-converting and re-indexing the entire
+    history on every super-step. Returns `None` when any precondition fails
+    (non-message inputs, chunks, removals, or id collisions), in which case
+    the caller falls back to the full merge.
+    """
+    right_ids: set[str] = set()
+    for m in right:
+        if not isinstance(m, BaseMessage) or isinstance(
+            m, (BaseMessageChunk, RemoveMessage)
+        ):
+            return None
+        if m.id is None:
+            m.id = str(uuid.uuid4())
+        elif m.id in right_ids:
+            return None
+        right_ids.add(m.id)
+    for m in left:
+        if not isinstance(m, BaseMessage) or isinstance(m, BaseMessageChunk):
+            return None
+        if m.id is None:
+            m.id = str(uuid.uuid4())
+        elif m.id in right_ids:
+            return None
+    return left + right
+
+
 def _add_messages_wrapper(func: Callable) -> Callable[[Messages, Messages], Messages]:
     def _add_messages(
         left: Messages | None = None, right: Messages | None = None, **kwargs: Any
@@ -190,48 +222,52 @@ def add_messages(
         left = [left]  # type: ignore[assignment]
     if not isinstance(right, list):
         right = [right]  # type: ignore[assignment]
-    # coerce to message
-    left = [
-        message_chunk_to_message(cast(BaseMessageChunk, m))
-        for m in convert_to_messages(left)
-    ]
-    right = [
-        message_chunk_to_message(cast(BaseMessageChunk, m))
-        for m in convert_to_messages(right)
-    ]
-    # assign missing ids
-    for m in left:
-        if m.id is None:
-            m.id = str(uuid.uuid4())
-    for idx, m in enumerate(right):
-        if m.id is None:
-            m.id = str(uuid.uuid4())
-        if isinstance(m, RemoveMessage) and m.id == REMOVE_ALL_MESSAGES:
-            remove_all_idx = idx
 
-    if remove_all_idx is not None:
-        return right[remove_all_idx + 1 :]
+    merged = _try_fast_merge(left, right)
+    if merged is None:
+        # coerce to message
+        left = [
+            message_chunk_to_message(cast(BaseMessageChunk, m))
+            for m in convert_to_messages(left)
+        ]
+        right = [
+            message_chunk_to_message(cast(BaseMessageChunk, m))
+            for m in convert_to_messages(right)
+        ]
+        # assign missing ids
+        for m in left:
+            if m.id is None:
+                m.id = str(uuid.uuid4())
+        for idx, m in enumerate(right):
+            if m.id is None:
+                m.id = str(uuid.uuid4())
+            if isinstance(m, RemoveMessage) and m.id == REMOVE_ALL_MESSAGES:
+                remove_all_idx = idx
 
-    # merge
-    merged = left.copy()
-    merged_by_id = {m.id: i for i, m in enumerate(merged)}
-    ids_to_remove = set()
-    for m in right:
-        if (existing_idx := merged_by_id.get(m.id)) is not None:
-            if isinstance(m, RemoveMessage):
-                ids_to_remove.add(m.id)
+        if remove_all_idx is not None:
+            return right[remove_all_idx + 1 :]
+
+        # merge
+        merged = left.copy()
+        merged_by_id = {m.id: i for i, m in enumerate(merged)}
+        ids_to_remove = set()
+        for m in right:
+            if (existing_idx := merged_by_id.get(m.id)) is not None:
+                if isinstance(m, RemoveMessage):
+                    ids_to_remove.add(m.id)
+                else:
+                    ids_to_remove.discard(m.id)
+                    merged[existing_idx] = m
             else:
-                ids_to_remove.discard(m.id)
-                merged[existing_idx] = m
-        else:
-            if isinstance(m, RemoveMessage):
-                raise ValueError(
-                    f"Attempting to delete a message with an ID that doesn't exist ('{m.id}')"
-                )
+                if isinstance(m, RemoveMessage):
+                    raise ValueError(
+                        f"Attempting to delete a message with an ID that doesn't exist ('{m.id}')"
+                    )
 
-            merged_by_id[m.id] = len(merged)
-            merged.append(m)
-    merged = [m for m in merged if m.id not in ids_to_remove]
+                merged_by_id[m.id] = len(merged)
+                merged.append(m)
+        if ids_to_remove:
+            merged = [m for m in merged if m.id not in ids_to_remove]
 
     if format == "langchain-openai":
         merged = _format_messages(merged)

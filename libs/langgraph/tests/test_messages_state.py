@@ -5,6 +5,7 @@ import langchain_core
 import pytest
 from langchain_core.messages import (
     AIMessage,
+    AIMessageChunk,
     AnyMessage,
     HumanMessage,
     RemoveMessage,
@@ -175,6 +176,37 @@ def test_delete_all():
     result = add_messages(left, right)
     expected_result = []
     assert result == expected_result
+
+
+def test_does_not_mutate_inputs():
+    left = [HumanMessage(content="Hello", id="1")]
+    right = [AIMessage(content="Hi there!", id="2")]
+    result = add_messages(left, right)
+    result.append(SystemMessage(content="extra", id="3"))
+    assert left == [HumanMessage(content="Hello", id="1")]
+    assert right == [AIMessage(content="Hi there!", id="2")]
+
+
+def test_chunk_in_right_is_coerced():
+    left = [HumanMessage(content="Hello", id="1")]
+    right = [AIMessageChunk(content="Hi there!", id="2")]
+    result = add_messages(left, right)
+    assert result == [
+        HumanMessage(content="Hello", id="1"),
+        AIMessage(content="Hi there!", id="2"),
+    ]
+    assert not isinstance(result[1], AIMessageChunk)
+
+
+def test_chunk_in_left_is_coerced():
+    left = [AIMessageChunk(content="Hi there!", id="1")]
+    right = [HumanMessage(content="Hello", id="2")]
+    result = add_messages(left, right)
+    assert result == [
+        AIMessage(content="Hi there!", id="1"),
+        HumanMessage(content="Hello", id="2"),
+    ]
+    assert not isinstance(result[0], AIMessageChunk)
 
 
 class MessagesStatePydantic(BaseModel):
